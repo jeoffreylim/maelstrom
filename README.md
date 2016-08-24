@@ -1,7 +1,7 @@
 # Maelstrom
 
 Maelstrom is an open source Kafka integration with Spark that is designed to be developer friendly, high performance
-(sub-millisecond stream processing), scalable (consumes messges at Spark worker nodes), and is extremely reliable.
+(millisecond stream processing), scalable (consumes messges at Spark worker nodes), and is extremely reliable.
 
 This library has been running stable in production environment and has been proven to be resilient to numerous
 production issues.  
@@ -11,7 +11,7 @@ Thanks to [Adlogica](http://www.adlogica.com/)  for sharing to the open source c
 ## Features
 
 - Simple framework which follows Kafka semantics and best practices.
-- High performance, with latencies down to sub-milliseconds.
+- High performance, with latencies down to milliseconds.
 - Scalable, where message consumption is received in the Spark worker nodes and not on the driver side.
 - Throttling by specifying maximum number of messages to process per each "bulk receive" 
 - Built-in offset management stored in Zookeeper. Numerous Kafka monitoring tools should work out of the box.
