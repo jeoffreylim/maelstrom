@@ -1,38 +1,37 @@
 package com.github.maelstrom.controller
 
 import com.github.maelstrom.KafkaRDDUtils
-import com.github.maelstrom.consumer.{IKafkaConsumerPoolFactory, KafkaMetaData}
-import kafka.cluster.Broker
+import com.github.maelstrom.consumer.{KafkaConsumerPoolFactory, KafkaMetaData}
 import kafka.javaapi.TopicMetadata
-import kafka.serializer.Decoder
 import org.apache.curator.framework.CuratorFramework
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{Logging, SparkContext}
 
+import scala.collection.mutable
 
-class ControllerKafkaTopic[K, V] (curator: CuratorFramework,
-                                  brokerList: java.util.List[Broker],
+class ControllerKafkaTopic[K, V] (sc: SparkContext,
+                                  curator: CuratorFramework,
+                                  poolFactory: KafkaConsumerPoolFactory[_,_],
                                   val consumerGroup: String,
                                   val topic: String,
-                                  keyDecoder: Decoder[K],
-                                  valueDecoder: Decoder[V]) extends IControllerKafka[K, V] with Logging {
-  val partitionMap = scala.collection.mutable.Map[Integer, ControllerKafkaPartition[K, V]]()
-  val metaData: java.util.Map[String, TopicMetadata] = KafkaMetaData.getTopicMetaData(brokerList, java.util.Collections.singletonList(topic))
+                                  val maxQueue: Int = 5000) extends IControllerKafka[K, V] with Logging {
+  val partitionMap = mutable.Map[Integer, ControllerKafkaPartition[K, V]]()
+  val metaData: java.util.Map[String, TopicMetadata] = KafkaMetaData.getTopicMetaData(poolFactory.getBrokerList, java.util.Collections.singletonList(topic))
 
   if (metaData.containsKey(topic)) {
     val topicMetadata: TopicMetadata = metaData.get(topic)
     val partionCount: Int = topicMetadata.partitionsMetadata.size
 
     for(i <- 0 until partionCount)
-      partitionMap.put(i, new ControllerKafkaPartition[K, V](curator, brokerList, consumerGroup, topic, i, keyDecoder, valueDecoder))
+      partitionMap.put(i, new ControllerKafkaPartition[K, V](sc, curator, poolFactory, consumerGroup, topic, i))
 
   } else {
     throw new IllegalArgumentException("Topic " + topic + " not found")
   }
 
   override def hashCode: Int = {
-    java.util.Objects.hash(this.consumerGroup, this.topic)
+    java.util.Objects.hash(consumerGroup, topic)
   }
 
   override def equals(other: Any): Boolean = {
@@ -61,7 +60,7 @@ class ControllerKafkaTopic[K, V] (curator: CuratorFramework,
     partitionMap.values
   }
 
-  final def getRDD(sc: SparkContext, consumerPoolFactory: IKafkaConsumerPoolFactory[_, _], maxQueue: Int): RDD[(K, V)] = {
+  final def getRDD(): RDD[(K, V)] = {
     val lag: Long = getLag
     val perEach: Long = Math.max(1, maxQueue / getPartitionCount)
     var offsets: Map[Int, (Long, Long)] = Map()
@@ -78,7 +77,7 @@ class ControllerKafkaTopic[K, V] (curator: CuratorFramework,
       offsets += (kafkaPartition.partitionId -> (kafkaPartition.getLastOffset, kafkaPartition.getStopAtOffset))
     }
 
-    KafkaRDDUtils.createKafkaRDD(sc, consumerPoolFactory, topic, offsets)
+    KafkaRDDUtils.createKafkaRDD(sc, poolFactory, topic, offsets)
       .persist(StorageLevel.MEMORY_ONLY)
       .setName("KafkaRDD-" + consumerGroup + ":" + topic)
       .asInstanceOf[RDD[(K, V)]]

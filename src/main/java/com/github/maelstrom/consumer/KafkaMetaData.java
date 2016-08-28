@@ -34,7 +34,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 
 /**
  * @author Jeoffrey Lim
- * @version 0.1
+ * @version 0.2
  */
 public class KafkaMetaData {
     private static final Logger LOG = LoggerFactory.getLogger(KafkaMetaData.class);

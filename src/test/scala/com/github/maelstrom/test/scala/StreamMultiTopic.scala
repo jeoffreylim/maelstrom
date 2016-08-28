@@ -1,26 +1,24 @@
 package com.github.maelstrom.test.scala
 
 import com.github.maelstrom.StreamProcessor
-import com.github.maelstrom.consumer.OffsetManager
+import com.github.maelstrom.consumer.{KafkaConsumerPoolFactory, OffsetManager}
 import com.github.maelstrom.controller.ControllerKafkaTopics
-import com.github.maelstrom.test.java.LocalKafkaConsumerPoolFactory
 import com.typesafe.scalalogging.slf4j.LazyLogging
 import kafka.serializer.StringDecoder
-import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.rdd.RDD
+import org.apache.spark.{SparkConf, SparkContext}
 
 object StreamMultiTopic extends LazyLogging {
   def main(args: Array[String]) {
     val sparkConf = new SparkConf().setMaster("local[4]").setAppName("StreamMultiTopic")
     val sc = new SparkContext(sparkConf)
     val curator = OffsetManager.createCurator("127.0.0.1:2181")
-    val pool = new LocalKafkaConsumerPoolFactory
-    val brokerList = pool.getKafkaConsumerPool.getBrokerList
-    val topics = new ControllerKafkaTopics[String, String](curator, brokerList, new StringDecoder(), new StringDecoder())
+    val poolFactory = new KafkaConsumerPoolFactory[String, String]("127.0.0.1:9092", classOf[StringDecoder], classOf[StringDecoder])
+    val topics = new ControllerKafkaTopics[String, String](sc, curator, poolFactory)
     topics.registerTopic("test_multi", "test")
     topics.registerTopic("test_multi", "test2")
 
-    new StreamProcessor[String, String](sc, pool, topics) {
+    new StreamProcessor[String, String](topics) {
       final def process() {
         val rdd: RDD[(String, String)] = fetch()
 

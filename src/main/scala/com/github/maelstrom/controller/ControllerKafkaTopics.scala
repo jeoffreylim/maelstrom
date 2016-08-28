@@ -3,29 +3,30 @@ package com.github.maelstrom.controller
 import java.util.concurrent.Executors
 
 import com.github.maelstrom.KafkaRDDUtils
-import com.github.maelstrom.consumer.IKafkaConsumerPoolFactory
-import kafka.cluster.Broker
-import kafka.serializer.Decoder
+import com.github.maelstrom.consumer.KafkaConsumerPoolFactory
 import org.apache.curator.framework.CuratorFramework
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{Logging, SparkContext}
 
-import scala.collection.mutable.ListBuffer
+import scala.collection.mutable
 import scala.concurrent.duration.Duration
 import scala.concurrent.{Await, ExecutionContext, Future}
 import scala.util.{Failure, Success}
 
-class ControllerKafkaTopics[K, V] (curator: CuratorFramework,
-                                   brokerList: java.util.List[Broker],
-                                   keyDecoder: Decoder[K],
-                                   valueDecoder: Decoder[V]) extends IControllerKafka[K, V] with Logging {
-  final private val topicSet = scala.collection.mutable.Set[ControllerKafkaTopic[K, V]]()
+class ControllerKafkaTopics[K, V] (sc: SparkContext,
+                                   curator: CuratorFramework,
+                                   poolFactory: KafkaConsumerPoolFactory[_,_]) extends IControllerKafka[K, V] with Logging {
+  final private val topicSet = mutable.Set[ControllerKafkaTopic[K, V]]()
   private lazy val executor = Executors.newFixedThreadPool(getTotalTopics)
   private implicit lazy val ec: ExecutionContext = ExecutionContext.fromExecutor(executor)
 
   final def registerTopic(consumerGroup: String, topic: String): ControllerKafkaTopic[K, V] = {
-    val controllerKafkaTopic: ControllerKafkaTopic[K, V] = new ControllerKafkaTopic[K, V](curator, brokerList, consumerGroup, topic, keyDecoder, valueDecoder)
+    registerTopic(consumerGroup, topic, 5000)
+  }
+
+  final def registerTopic(consumerGroup: String, topic: String, maxQueue: Int = 5000): ControllerKafkaTopic[K, V] = {
+    val controllerKafkaTopic = new ControllerKafkaTopic[K, V](sc, curator, poolFactory, consumerGroup, topic, maxQueue)
     if (topicSet.contains(controllerKafkaTopic)) throw new IllegalArgumentException("Already registered this kind of topic")
     topicSet.add(controllerKafkaTopic)
     controllerKafkaTopic
@@ -35,11 +36,13 @@ class ControllerKafkaTopics[K, V] (curator: CuratorFramework,
     topicSet.size
   }
 
-  final def getTotalReceivers: Int = {
-    var totalReceivers: Int = 0
+  final def getTotalPartitions: Int = {
+    var totalPartitions: Int = 0
+
     for (kafkaTopic <- topicSet)
-      totalReceivers += kafkaTopic.getPartitionCount
-    totalReceivers
+      totalPartitions += kafkaTopic.getPartitionCount
+
+    totalPartitions
   }
 
   final def close() {
@@ -57,20 +60,17 @@ class ControllerKafkaTopics[K, V] (curator: CuratorFramework,
     for (kafkaTopic <- topicSet) kafkaTopic.commit()
   }
 
-  final def getAllRDDs(sc: SparkContext, consumerPoolFactory: IKafkaConsumerPoolFactory[_, _], maxQueue: Int): List[RDD[(K, V)]] = {
+  final def getAllRDDs: List[RDD[(K, V)]] = {
     val lag: Long = getLag
-    val perEach: Long = Math.max(1, maxQueue / getTotalReceivers)
-
-    logDebug(s"maxQueue=$maxQueue receivers=$getTotalReceivers perEach=$perEach")
-
-    val futures = ListBuffer[Future[RDD[(K,V)]]]()
+    var futures = mutable.ListBuffer[Future[RDD[(K,V)]]]()
 
     for (controllerKafkaTopic <- topicSet) {
       if (controllerKafkaTopic.getLag > 0) {
         var offsets: Map[Int, (Long, Long)] = Map()
+        val perEach: Long = Math.max(1, controllerKafkaTopic.maxQueue / controllerKafkaTopic.getPartitionCount)
 
         for (kafkaPartition <- controllerKafkaTopic.getPartitions) {
-          if (lag > maxQueue) {
+          if (lag > perEach) {
             kafkaPartition.setStopAtOffset(Math.min(kafkaPartition.getLastOffset + perEach, kafkaPartition.getLastOffset + kafkaPartition.getLag))
             logDebug(s"REAP PARTIAL: [${kafkaPartition.topic}]-[${kafkaPartition.partitionId}] : @${kafkaPartition.getStopAtOffset}")
           } else {
@@ -83,7 +83,7 @@ class ControllerKafkaTopics[K, V] (curator: CuratorFramework,
 
         futures += Future {
           logDebug("LOADING RDD - " + controllerKafkaTopic.consumerGroup + ":" + controllerKafkaTopic.topic)
-          KafkaRDDUtils.createKafkaRDD(sc, consumerPoolFactory, controllerKafkaTopic.topic, offsets)
+          KafkaRDDUtils.createKafkaRDD(sc, poolFactory, controllerKafkaTopic.topic, offsets)
             .persist(StorageLevel.MEMORY_ONLY)
             .setName("KafkaRDD-" + controllerKafkaTopic.consumerGroup + ":" + controllerKafkaTopic.topic)
             .asInstanceOf[RDD[(K, V)]]
@@ -93,7 +93,7 @@ class ControllerKafkaTopics[K, V] (curator: CuratorFramework,
 
     Await.result(Future.sequence(futures), Duration.Inf)
 
-    val rDDs = ListBuffer[RDD[(K, V)]]()
+    var rDDs = mutable.ListBuffer[RDD[(K, V)]]()
 
     futures.foreach(f =>
       f.value.get match {
@@ -107,7 +107,7 @@ class ControllerKafkaTopics[K, V] (curator: CuratorFramework,
     rDDs.toList
   }
 
-  final def getRDD(sc: SparkContext, consumerPoolFactory: IKafkaConsumerPoolFactory[_, _], maxQueue: Int): RDD[(K, V)] = {
-    getAllRDDs(sc, consumerPoolFactory, maxQueue).reduce(_ union _)
+  final def getRDD(): RDD[(K, V)] = {
+    getAllRDDs.reduce(_ union _)
   }
 }

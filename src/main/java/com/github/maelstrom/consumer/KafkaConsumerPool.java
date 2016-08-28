@@ -32,7 +32,7 @@ import java.util.concurrent.TimeUnit;
 
 /**
  * @author Jeoffrey Lim
- * @version 0.1
+ * @version 0.2
  */
 public final class KafkaConsumerPool<K,V> {
     private static final Logger LOG = LoggerFactory.getLogger(KafkaConsumerPool.class);

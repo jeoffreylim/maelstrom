@@ -1,22 +1,23 @@
 package com.github.maelstrom.controller
 
 import com.github.maelstrom.KafkaRDDUtils
-import com.github.maelstrom.consumer.{IKafkaConsumerPoolFactory, KafkaConsumer, OffsetManager}
-import kafka.cluster.Broker
+import com.github.maelstrom.consumer.{KafkaConsumer, KafkaConsumerPoolFactory, OffsetManager}
 import kafka.serializer.Decoder
 import org.apache.curator.framework.CuratorFramework
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
 import org.apache.spark.{Logging, SparkContext}
 
-class ControllerKafkaPartition[K, V](val curator: CuratorFramework,
-                                     val brokerList: java.util.List[Broker],
+class ControllerKafkaPartition[K, V](sc: SparkContext,
+                                     curator: CuratorFramework,
+                                     poolFactory: KafkaConsumerPoolFactory[_,_],
                                      val consumerGroup: String,
                                      val topic: String,
                                      val partitionId: Int,
-                                     val keyDecoder: Decoder[K],
-                                     val valueDecoder: Decoder[V]) extends IControllerKafka[K, V] with Logging {
-  final private val consumer: KafkaConsumer[K, V] = new KafkaConsumer[K, V](brokerList, consumerGroup, keyDecoder, valueDecoder, topic, partitionId)
+                                     val maxQueue: Int = 5000) extends IControllerKafka[K, V] with Logging {
+  final private val consumer: KafkaConsumer[K, V] = new KafkaConsumer[K, V](poolFactory.getBrokerList,
+    consumerGroup, poolFactory.createKeyDecoder().asInstanceOf[Decoder[K]],
+    poolFactory.createValueDecoder().asInstanceOf[Decoder[V]], topic, partitionId)
   final private val offsetManager: OffsetManager = new OffsetManager(curator, consumer, consumerGroup, topic, partitionId)
   private var stopAtOffset: Long = -1
 
@@ -51,7 +52,7 @@ class ControllerKafkaPartition[K, V](val curator: CuratorFramework,
     stopAtOffset = -1
   }
 
-  final def getRDD(sc: SparkContext, consumerPoolFactory: IKafkaConsumerPoolFactory[_, _], maxQueue: Int): RDD[(K, V)] = {
+  final def getRDD(): RDD[(K, V)] = {
     val lag: Long = getLag
     val perEach: Long = Math.max(1, maxQueue)
     var offsets: Map[Int, (Long, Long)] = Map()
@@ -67,7 +68,7 @@ class ControllerKafkaPartition[K, V](val curator: CuratorFramework,
     logDebug(s"OFFSET RANGE: [$topic]-[$partitionId] : $getLastOffset->$getStopAtOffset = ${getStopAtOffset - getLastOffset}")
     offsets += (partitionId -> (getLastOffset, getStopAtOffset))
 
-    KafkaRDDUtils.createKafkaRDD(sc, consumerPoolFactory, topic, offsets)
+    KafkaRDDUtils.createKafkaRDD(sc, poolFactory, topic, offsets)
       .persist(StorageLevel.MEMORY_ONLY)
       .setName("KafkaRDD-" + consumerGroup + ":" + topic + ":" + partitionId)
       .asInstanceOf[RDD[(K, V)]]

@@ -20,12 +20,13 @@ package com.github.maelstrom
 import java.lang.{Integer => JInt, Long => JLong}
 import java.util.{Map => JMap}
 
-import com.github.maelstrom.consumer.{IKafkaConsumerPoolFactory, KafkaConsumerPool}
+import com.github.maelstrom.consumer.{KafkaConsumerPool, KafkaConsumerPoolFactory}
+import com.googlecode.concurrentlinkedhashmap.ConcurrentLinkedHashMap
 import kafka.message.MessageAndMetadata
 import org.apache.spark.api.java.JavaRDD
 import org.apache.spark.rdd.RDD
 import org.apache.spark.util.TaskCompletionListener
-import org.apache.spark.{Partition, SparkContext, TaskContext}
+import org.apache.spark.{Logging, Partition, SparkContext, TaskContext}
 
 import scala.collection.Iterator
 import scala.collection.JavaConversions._
@@ -36,15 +37,15 @@ import scala.reflect.ClassTag
 * Apache Spark + Kafka Integration
 *
 * @author Jeoffrey Lim
-* @version 0.1
+* @version 0.2
 */
 
 object KafkaRDDUtils {
-  def createJavaKafkaRDD[K:ClassTag, V:ClassTag](sc: SparkContext, poolFactory: IKafkaConsumerPoolFactory[K,V], topic: String, joffsets: JMap[JInt, (JLong, JLong)]): JavaRDD[(K,V)] = {
+  def createJavaKafkaRDD[K:ClassTag, V:ClassTag](sc: SparkContext, poolFactory: KafkaConsumerPoolFactory[K,V], topic: String, joffsets: JMap[JInt, (JLong, JLong)]): JavaRDD[(K,V)] = {
     createKafkaRDDJavaParams(sc, poolFactory, topic, joffsets).toJavaRDD()
   }
 
-  def createKafkaRDDJavaParams[K:ClassTag, V:ClassTag](sc: SparkContext, poolFactory: IKafkaConsumerPoolFactory[K,V], topic: String, joffsets: JMap[JInt, (JLong, JLong)]): RDD[(K,V)] = {
+  def createKafkaRDDJavaParams[K:ClassTag, V:ClassTag](sc: SparkContext, poolFactory: KafkaConsumerPoolFactory[K,V], topic: String, joffsets: JMap[JInt, (JLong, JLong)]): RDD[(K,V)] = {
     var offsets: Map[Int, (Long, Long)] = Map()
     joffsets.foreach(kv =>
       offsets += (kv._1.toInt ->(kv._2._1.toLong, kv._2._2.toLong))
@@ -52,14 +53,35 @@ object KafkaRDDUtils {
     new KafkaRDD(sc, poolFactory, topic, offsets)
   }
 
-  def createKafkaRDD[K:ClassTag, V:ClassTag](sc: SparkContext, poolFactory: IKafkaConsumerPoolFactory[K,V], topic: String, offsets: Map[Int, (Long,Long)]): RDD[(K,V)] = {
+  def createKafkaRDD[K:ClassTag, V:ClassTag](sc: SparkContext, poolFactory: KafkaConsumerPoolFactory[K,V], topic: String, offsets: Map[Int, (Long,Long)]): RDD[(K,V)] = {
     new KafkaRDD[K,V](sc, poolFactory, topic, offsets)
   }
 }
 
-class KafkaRDD[K:ClassTag, V:ClassTag](sc: SparkContext, val poolFactory: IKafkaConsumerPoolFactory[K,V], val topic: String, val offsets: Map[Int, (Long,Long)]) extends RDD[(K,V)](sc, Nil) {
+object KafkaConsumerPoolCache extends Logging {
+  private val poolFactoryCache =
+    new ConcurrentLinkedHashMap.Builder[KafkaConsumerPoolFactory[_, _], KafkaConsumerPool[_, _]]()
+      .maximumWeightedCapacity(Integer.MAX_VALUE).build
+
+  def getKafkaConsumerPool(poolFactory: KafkaConsumerPoolFactory[_, _]) : KafkaConsumerPool[_, _] = {
+    var consumerPool: KafkaConsumerPool[_, _] = poolFactoryCache.get(poolFactory)
+
+    if (consumerPool == null) {
+      consumerPool = poolFactory.createKafkaConsumerPool
+      poolFactoryCache.put(poolFactory, consumerPool)
+      logDebug(s"CREATED NEW KafkaConsumerPool=${poolFactory.hashCode()}")
+    } else {
+      logDebug(s"GOT CACHED KafkaConsumerPool=${poolFactory.hashCode()}")
+    }
+
+    consumerPool
+  }
+}
+
+class KafkaRDD[K:ClassTag, V:ClassTag](sc: SparkContext, val poolFactory: KafkaConsumerPoolFactory[K,V], val topic: String, val offsets: Map[Int, (Long,Long)]) extends RDD[(K,V)](sc, Nil) {
   final def compute(partition: Partition, context: TaskContext): Iterator[(K,V)] = {
-    val iterator: KafkaIterator[K,V] = new KafkaIterator[K,V](poolFactory.getKafkaConsumerPool, partition.asInstanceOf[KafkaPartition])
+    val consumerPool = KafkaConsumerPoolCache.getKafkaConsumerPool(poolFactory).asInstanceOf[KafkaConsumerPool[K,V]]
+    val iterator: KafkaIterator[K,V] = new KafkaIterator[K,V](consumerPool, partition.asInstanceOf[KafkaPartition])
     context.addTaskCompletionListener(iterator)
     iterator
   }
@@ -89,7 +111,7 @@ class KafkaIterator[K,V]
   protected var finished = false
   private var offset = kafkaPartition.startOffset
   private val consumer = consumerPool.getConsumer(kafkaPartition.topic, kafkaPartition.index)
-  private var it: Iterator[MessageAndMetadata[K, V]] = null
+  private var it: Iterator[MessageAndMetadata[K, V]] = _
 
   consumer.setCurrentOffset(kafkaPartition.startOffset)
 

@@ -1,7 +1,7 @@
 # Maelstrom
 
 Maelstrom is an open source Kafka integration with Spark that is designed to be developer friendly, high performance
-(millisecond stream processing), scalable (consumes messges at Spark worker nodes), and is extremely reliable.
+(millisecond stream processing), scalable (consumes messages at Spark worker nodes), and is extremely reliable.
 
 This library has been running stable in production environment and has been proven to be resilient to numerous
 production issues.  
@@ -66,72 +66,25 @@ Add the library in your project maven dependencies:
     <dependency>
         <groupId>com.github.maelstrom</groupId>
         <artifactId>maelstrom</artifactId>
-        <version>0.1</version>
+        <version>0.2</version>
     </dependency>
 ```
 
-## Setting up the Kafka ConsumerPool Factory
+## Kafka Consumer on Executors
 
-To be able to consume messages on the Spark worker side and re-use Kafka connections, a "static initializer" is required. 
-This limitation is in Spark itself, please refer to:
+The KafkaConsumerPoolFactory gets serialized over the wire to the Spark executors and cache Kafka Consumers to
+establish a persistent connection to Kafka brokers. Future version of Maelstrom is to make these Kafka Consumers
+remain to a specific Spark executor to as much as possible: all registered Consumer Group + Topics + Partitions 
+properly distributed to available Spark executors (Worker + Number of Executors).
 
-https://issues.apache.org/jira/browse/SPARK-650 (Add a "setup hook" API for running initialization code on each executor)
-https://issues.apache.org/jira/browse/SPARK-1107 (Add shutdown hook on executor stop to stop running tasks)
 
-In the example below, a configuration can be read from your Spark application jar with multiple environments.
-
-```java
-class MyKafkaConsumerPoolFactory implements IKafkaConsumerPoolFactory<String,AvroDataModel> {
-
-    @Override
-    public KafkaConsumerPool<String,AvroDataModel> getKafkaConsumerPool() {
-        return ConsumerPoolHolder.instance;
-    }
-
-    private static class ConsumerPoolHolder {
-        private static final String env = System.getProperty("my.env");
-        private static final Properties properties = load();
-        private static final String BROKER_LIST = properties.getProperty(env + ".broker_list");
-
-        private static final KafkaConsumerPool<String,String> instance =
-                new KafkaConsumerPool<>(DEFAULT_POOL_SIZE,
-                        DEFAULT_EXPIRE_AFTER_MINUTES,
-                        BROKER_LIST,
-                        new StringDecoder(null),
-                        new AvroDataModelDecoder()
-                );
-
-        private static Properties load() {
-            Properties props = new Properties();
-
-            try {
-                props.load(MyKafkaConsumerPoolFactory.class.getResourceAsStream("/myconfig.properties"));
-            } catch (IOException e) {
-                throw new RuntimeException("Config cannot be loaded", e);
-            }
-            return props;
-        }
-    }
-}
-```
-
-In your project *resources/myconfig.properties*:
-
-```
-local.broker_list=127.0.0.1:9092
-staging.broker_list=staging1:9092,staging2:9092,staging3:9092
-production.broker_list=prod1:9092,prod2:9092,prod3:9092
-```
-
-And run your application (if _staging_):
-
-```
-spark-submit \
-    ....
-    --conf "spark.driver.extraJavaOptions=-Dmy.env=staging \
-    --conf "spark.executor.extraJavaOptions=-Dmy.env=staging \
-    --class <spark app>
-```
+| Config          | Description                                                                      | Default   |
+|-----------------|----------------------------------------------------------------------------------|-----------|
+| brokers         | The Kafka Broker List                                                            | n/a       |
+| keyMapper       | Class for decoding Keys                                                          | n/a       |
+| valueMapper     | Class for decoding Values                                                        | n/a       |
+| maxSize         | Make this at least double the amount of all Consumer Group + Topics + Partitions | 1000      |
+| expireAfterMins | Kafka Consumer that is unused will expire after the defined minutes              | 5 minutes |
 
 ## Java example
 
@@ -140,13 +93,12 @@ SparkConf sparkConf = new SparkConf().setMaster("local[4]").setAppName("StreamSi
 JavaSparkContext sc = new JavaSparkContext(sparkConf);
 
 CuratorFramework curator = OffsetManager.createCurator("127.0.0.1:2181");
-IKafkaConsumerPoolFactory<String,String> pool = new LocalKafkaConsumerPoolFactory();
-List<Broker> brokerList = pool.getKafkaConsumerPool().getBrokerList();
+KafkaConsumerPoolFactory<String,String> poolFactory = new KafkaConsumerPoolFactory<>("127.0.0.1:9092", StringDecoder.class, StringDecoder.class);
 
-ControllerKafkaTopics<String,String> topics = new ControllerKafkaTopics<>(curator, brokerList, new StringDecoder(null), new StringDecoder(null), String.class, String.class);
+ControllerKafkaTopics<String,String> topics = new ControllerKafkaTopics<>(sc.sc(), curator, poolFactory);
 ControllerKafkaTopic<String,String> topic = topics.registerTopic("test_group", "test");
 
-new StreamProcessor<String,String>(sc.sc(), pool, topic) {
+new StreamProcessor<String,String>(topic) {
     @Override
     public final void process() {
         JavaRDD<Tuple2<String,String>> rdd = fetch().toJavaRDD();
@@ -174,12 +126,11 @@ sc.sc().stop();
 val sparkConf = new SparkConf().setMaster("local[4]").setAppName("StreamSingleTopic")
 val sc = new SparkContext(sparkConf)
 val curator = OffsetManager.createCurator("127.0.0.1:2181")
-val pool = new LocalKafkaConsumerPoolFactory
-val brokerList = pool.getKafkaConsumerPool.getBrokerList
-val topics = new ControllerKafkaTopics[String, String](curator, brokerList, new StringDecoder(), new StringDecoder(), classOf[String], classOf[String])
+val poolFactory = new KafkaConsumerPoolFactory[String, String]("127.0.0.1:9092", classOf[StringDecoder], classOf[StringDecoder])
+val topics = new ControllerKafkaTopics[String, String](sc, curator, poolFactory)
 val topic = topics.registerTopic("test_group", "test")
 
-new StreamProcessor[String, String](sc, pool, topic) {
+new StreamProcessor[String, String](topic) {
   final def process() {
     val rdd: RDD[(String, String)] = fetch()
 
@@ -195,6 +146,48 @@ new StreamProcessor[String, String](sc, pool, topic) {
 
 sc.stop()
 ```
+
+## Example of a Multi-Topic + Multi Processor with throttling
+
+One stream processor consumes on *test* topic with maximum 1000 records per mini-batch.
+Second stream processor consumes on *test2* topic with maximum 500 records per mini-batch.
+
+```scala
+val sparkConf = new SparkConf().setMaster("local[4]").setAppName("StreamMultiTopicMultiProc")
+val sc = new SparkContext(sparkConf)
+val curator = OffsetManager.createCurator("127.0.0.1:2181")
+val poolFactory = new KafkaConsumerPoolFactory[String, String]("127.0.0.1:9092", classOf[StringDecoder], classOf[StringDecoder])
+val topics = new ControllerKafkaTopics[String, String](sc, curator, poolFactory)
+
+new ProcessorRunner().addProcessor(new StreamProcessor[String, String](topics.registerTopic("test_multi_proc", "test", 1000)) {
+  final def process() {
+    val rdd: RDD[(String, String)] = fetch()
+
+    rdd.foreachPartition { partitionData =>
+      partitionData.foreach { record =>
+        logger.info("key=" + record._1 + " val=" + record._2)
+      }
+    }
+
+    commit()
+  }
+}).addProcessor(new StreamProcessor[String, String](topics.registerTopic("test_multi_proc", "test2", 500)) {
+  final def process() {
+    val rdd: RDD[(String, String)] = fetch()
+
+    rdd.foreachPartition { partitionData =>
+      partitionData.foreach { record =>
+        logger.info("key=" + record._1 + " val=" + record._2)
+      }
+    }
+
+    commit()
+  }
+}).start()
+
+sc.stop()
+```
+
 
 ## TODO:
 

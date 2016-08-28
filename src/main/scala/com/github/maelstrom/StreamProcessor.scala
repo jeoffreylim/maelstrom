@@ -34,9 +34,7 @@ package com.github.maelstrom
 import java.io.Serializable
 import java.util.concurrent.atomic.AtomicBoolean
 
-import com.github.maelstrom.consumer.IKafkaConsumerPoolFactory
 import com.github.maelstrom.controller.IControllerKafka
-import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
 
 /**
@@ -47,11 +45,9 @@ import org.apache.spark.rdd.RDD
   * and another for filtering messages and sending emails.
   *
   * @author Jeoffrey Lim
-  * @version 0.1
+  * @version 0.2
   */
-abstract class StreamProcessor[K, V](@transient val sc: SparkContext,
-                                     @transient val pool: IKafkaConsumerPoolFactory[K, V],
-                                     @transient val controller: IControllerKafka[K, V]) extends Runnable with Serializable {
+abstract class StreamProcessor[K, V](@transient val controller: IControllerKafka[K, V]) extends Runnable with Serializable {
   final private val isStopCalled: AtomicBoolean = new AtomicBoolean(false)
 
   final def run() {
@@ -79,26 +75,17 @@ abstract class StreamProcessor[K, V](@transient val sc: SparkContext,
   }
 
   /**
-    * Default fetch retrieves only maximum of 5k messages by default
+    * Fetch messages from the registered controller
     * @return RDD
     */
   def fetch(): RDD[(K, V)] = {
-    fetch(5000)
-  }
-
-  /**
-    * Fetch all messages from the registered controller
-    * @param max maximum number of messages to retrieve
-    * @return RDD
-    */
-  def fetch(max: Int): RDD[(K, V)] = {
-    controller.getRDD(sc, pool, max)
+    controller.getRDD
   }
 
   /**
     * Extend this function to provide other conditions before triggering processing.
     * An example of this is to check maximum lag (bucket full), or trigger every X time elapsed.
-    * This would be useful for most especially for data aggregation.
+    * This would be useful most especially for data aggregation.
     *
     * @return true if stream processing should proceed
     */

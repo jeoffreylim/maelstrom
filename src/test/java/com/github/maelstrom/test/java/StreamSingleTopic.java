@@ -1,12 +1,10 @@
 package com.github.maelstrom.test.java;
 
-import com.github.maelstrom.ProcessorRunner;
 import com.github.maelstrom.StreamProcessor;
-import com.github.maelstrom.consumer.IKafkaConsumerPoolFactory;
+import com.github.maelstrom.consumer.KafkaConsumerPoolFactory;
 import com.github.maelstrom.consumer.OffsetManager;
 import com.github.maelstrom.controller.ControllerKafkaTopic;
 import com.github.maelstrom.controller.ControllerKafkaTopics;
-import kafka.cluster.Broker;
 import kafka.serializer.StringDecoder;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.spark.SparkConf;
@@ -18,7 +16,6 @@ import org.slf4j.LoggerFactory;
 import scala.Tuple2;
 
 import java.util.Iterator;
-import java.util.List;
 
 public class StreamSingleTopic {
     private static final Logger LOG = LoggerFactory.getLogger(StreamSingleTopic.class);
@@ -28,13 +25,12 @@ public class StreamSingleTopic {
         JavaSparkContext sc = new JavaSparkContext(sparkConf);
 
         CuratorFramework curator = OffsetManager.createCurator("127.0.0.1:2181");
-        IKafkaConsumerPoolFactory<String,String> pool = new LocalKafkaConsumerPoolFactory();
-        List<Broker> brokerList = pool.getKafkaConsumerPool().getBrokerList();
+        KafkaConsumerPoolFactory<String,String> poolFactory = new KafkaConsumerPoolFactory<>("127.0.0.1:9092", StringDecoder.class, StringDecoder.class);
 
-        ControllerKafkaTopics<String,String> topics = new ControllerKafkaTopics<>(curator, brokerList, new StringDecoder(null), new StringDecoder(null));
+        ControllerKafkaTopics<String,String> topics = new ControllerKafkaTopics<>(sc.sc(), curator, poolFactory);
         ControllerKafkaTopic<String,String> topic = topics.registerTopic("test_group", "test");
 
-        new StreamProcessor<String,String>(sc.sc(), pool, topic) {
+        new StreamProcessor<String,String>(topic) {
             @Override
             public final void process() {
                 JavaRDD<Tuple2<String,String>> rdd = fetch().toJavaRDD();

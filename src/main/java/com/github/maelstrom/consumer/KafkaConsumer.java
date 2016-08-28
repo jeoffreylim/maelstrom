@@ -44,7 +44,7 @@ import java.util.concurrent.Callable;
  * - https://github.com/lyogavin/Pistachio/blob/master/src/main/java/com/yahoo/ads/pb/kafka/KafkaSimpleConsumer.java
  *
  * @author Jeoffrey Lim
- * @version 0.1
+ * @version 0.2
  */
 public final class KafkaConsumer<K,V> {
     private static final Logger LOG = LoggerFactory.getLogger(KafkaConsumer.class);

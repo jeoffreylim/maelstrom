@@ -30,7 +30,7 @@ import java.util.concurrent.ThreadFactory;
 
 /**
  * @author Jeoffrey Lim
- * @version 0.1
+ * @version 0.2
  */
 public class OffsetManager {
     private static final Logger LOG = LoggerFactory.getLogger(OffsetManager.class);
