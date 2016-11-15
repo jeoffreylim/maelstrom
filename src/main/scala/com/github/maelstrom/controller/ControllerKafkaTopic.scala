@@ -1,12 +1,12 @@
 package com.github.maelstrom.controller
 
-import com.github.maelstrom.KafkaRDDUtils
 import com.github.maelstrom.consumer.{KafkaConsumerPoolFactory, KafkaMetaData}
+import com.github.maelstrom.{KafkaRDDUtils, Logging}
 import kafka.javaapi.TopicMetadata
 import org.apache.curator.framework.CuratorFramework
+import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
-import org.apache.spark.{Logging, SparkContext}
 
 import scala.collection.mutable
 

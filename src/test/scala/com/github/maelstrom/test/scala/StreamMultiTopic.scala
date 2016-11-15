@@ -3,12 +3,14 @@ package com.github.maelstrom.test.scala
 import com.github.maelstrom.StreamProcessor
 import com.github.maelstrom.consumer.{KafkaConsumerPoolFactory, OffsetManager}
 import com.github.maelstrom.controller.ControllerKafkaTopics
-import com.typesafe.scalalogging.slf4j.LazyLogging
 import kafka.serializer.StringDecoder
 import org.apache.spark.rdd.RDD
 import org.apache.spark.{SparkConf, SparkContext}
+import org.slf4j.{Logger, LoggerFactory}
 
-object StreamMultiTopic extends LazyLogging {
+object StreamMultiTopic {
+  private val logger: Logger = LoggerFactory.getLogger(getClass)
+
   def main(args: Array[String]) {
     val sparkConf = new SparkConf().setMaster("local[4]").setAppName("StreamMultiTopic")
     val sc = new SparkContext(sparkConf)
@@ -24,7 +26,7 @@ object StreamMultiTopic extends LazyLogging {
 
         rdd.foreachPartition { partitionData =>
           partitionData.foreach { record =>
-            logger.info("key=" + record._1 + " val=" + record._2)
+            logger.info(s"key=${record._1} val=]${record._2}")
           }
         }
 

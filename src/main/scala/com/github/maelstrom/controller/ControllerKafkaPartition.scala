@@ -1,12 +1,12 @@
 package com.github.maelstrom.controller
 
-import com.github.maelstrom.KafkaRDDUtils
+import com.github.maelstrom.{KafkaRDDUtils, Logging}
 import com.github.maelstrom.consumer.{KafkaConsumer, KafkaConsumerPoolFactory, OffsetManager}
 import kafka.serializer.Decoder
 import org.apache.curator.framework.CuratorFramework
 import org.apache.spark.rdd.RDD
 import org.apache.spark.storage.StorageLevel
-import org.apache.spark.{Logging, SparkContext}
+import org.apache.spark.SparkContext
 
 class ControllerKafkaPartition[K, V](sc: SparkContext,
                                      curator: CuratorFramework,

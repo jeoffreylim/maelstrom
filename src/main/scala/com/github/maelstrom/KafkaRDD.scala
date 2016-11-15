@@ -26,7 +26,7 @@ import kafka.message.MessageAndMetadata
 import org.apache.spark.api.java.JavaRDD
 import org.apache.spark.rdd.RDD
 import org.apache.spark.util.TaskCompletionListener
-import org.apache.spark.{Logging, Partition, SparkContext, TaskContext}
+import org.apache.spark.{Partition, SparkContext, TaskContext}
 
 import scala.collection.Iterator
 import scala.collection.JavaConversions._
