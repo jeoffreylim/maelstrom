@@ -18,10 +18,10 @@
 package com.github.maelstrom
 
 import java.lang.{Integer => JInt, Long => JLong}
+import java.util.concurrent.ConcurrentHashMap
 import java.util.{Map => JMap}
 
 import com.github.maelstrom.consumer.{KafkaConsumerPool, KafkaConsumerPoolFactory}
-import com.googlecode.concurrentlinkedhashmap.ConcurrentLinkedHashMap
 import kafka.message.MessageAndMetadata
 import org.apache.spark.api.java.JavaRDD
 import org.apache.spark.rdd.RDD
@@ -60,8 +60,7 @@ object KafkaRDDUtils {
 
 object KafkaConsumerPoolCache extends Logging {
   private val poolFactoryCache =
-    new ConcurrentLinkedHashMap.Builder[KafkaConsumerPoolFactory[_, _], KafkaConsumerPool[_, _]]()
-      .maximumWeightedCapacity(Integer.MAX_VALUE).build
+    new ConcurrentHashMap[KafkaConsumerPoolFactory[_, _], KafkaConsumerPool[_, _]]()
 
   def getKafkaConsumerPool(poolFactory: KafkaConsumerPoolFactory[_, _]) : KafkaConsumerPool[_, _] = {
     var consumerPool: KafkaConsumerPool[_, _] = poolFactoryCache.get(poolFactory)
@@ -110,7 +109,8 @@ class KafkaIterator[K,V]
   private var closed  = false
   protected var finished = false
   private var offset = kafkaPartition.startOffset
-  private val consumer = consumerPool.getConsumer(kafkaPartition.topic, kafkaPartition.index)
+  private val poolableConsumer = consumerPool.getConsumer(kafkaPartition.topic, kafkaPartition.index)
+  private val consumer = poolableConsumer.take()
   private var it: Iterator[MessageAndMetadata[K, V]] = _
 
   consumer.setCurrentOffset(kafkaPartition.startOffset)
@@ -122,7 +122,7 @@ class KafkaIterator[K,V]
   private def closeIfNeeded() {
     if (!closed) {
       closed = true
-      consumerPool.returnConsumer(consumer)
+      consumerPool.returnConsumer(poolableConsumer, consumer)
     }
   }
 
